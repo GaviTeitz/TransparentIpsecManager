@@ -1,0 +1,3 @@
+gatewayIp  : GATEWAY_IP
+gatewayMac : GATEWAY_MAC
+ovsBridge  : OVS_BRIDGE

@@ -1,0 +1,9 @@
+conn TUNNEL_NAME
+        left=LOCAL_GATEWAY_IP
+        leftsubnet=SOURCE_IP
+        leftid=LOCAL_ID
+        leftfirewall=yes
+        right=REMOTE_GATEWAY_IP
+        rightsubnet=DEST_IP
+        rightid=REMOTE_ID
+        auto=add
