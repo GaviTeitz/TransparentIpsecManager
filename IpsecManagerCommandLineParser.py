@@ -29,15 +29,11 @@ class IpsecManagerCommandLineParser(object):
             ip, netmask = tuple(ipAddress.split('/'))
             return ipAddressIsValid(ip) and int(netmask) <= 32
 
-        def macAddressIsValid(macAddress):
-            return bool(re.search(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$', macAddress))
-
         self.commandsAndParams = OrderedDict([('createIpsecGateway',  OrderedDict([('ovsBridge',        lambda _: True),
                                                                                    ('gatewayIp',        ipAddressWithNetmaskIsValid)])),
                                               ('destroyIpsecGateway', {}),
                                               ('addIpsecTunnel',      OrderedDict([('name',             lambda _: True),
                                                                                    ('sourceIp',         ipAddressIsValid),
-                                                                                   ('sourceMacAddress', macAddressIsValid),
                                                                                    ('destIp',           ipAddressIsValid),
                                                                                    ('remoteGatewayIp',  ipAddressIsValid),
                                                                                    ('localId',          lambda _: True),

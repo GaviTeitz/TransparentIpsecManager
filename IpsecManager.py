@@ -6,7 +6,7 @@ import re
 from time import sleep
 
 from BashCommand import BashCommand, TimedBashCommand, TimeoutException
-from IpsecManagerUtilityMethods import writeToFileFromTemplate, removeLinesFromFile, interfaceExists, getMacAddr, convertIpToHex, stripMacAddress
+from IpsecManagerUtilityMethods import writeToFileFromTemplate, removeLinesFromFile, interfaceExists, getMacAddr, convertIpToHex
 from IpsecManagerErrorHandlers import ipRouteAddStderrHandler
 
 class IpsecManager(object):
@@ -68,7 +68,7 @@ class IpsecManager(object):
         os.remove(self.gatewayConfFilename)
 
     # Adds a new transparent IPSEC tunnel, from the given source ip address to the given destination ip address, with the given ids
-    def addIpsecTunnel(self, name, sourceIp, sourceMacAddress, destIp, remoteGateway, localId, remoteId):
+    def addIpsecTunnel(self, name, sourceIp, destIp, remoteGateway, localId, remoteId):
         if not interfaceExists(self.gatewayInterfaceName):
             raise RuntimeError('There is no local gateway')
 
@@ -94,10 +94,10 @@ class IpsecManager(object):
                                                                                                   'REMOTE_ID'   : remoteId,
                                                                                                   'TUNNEL_NAME' : name})
 
-        # Add on openFlow rule to forward packets coming from the source to the IPSEC module, via the gateway interface veth-pair:
+        # Add an openFlow rule to forward packets coming from the sourceIp to the IPSEC module, via the gateway interface veth-pair:
         BashCommand('ovs-ofctl add-flow ' + ovsBridge + ' table=0,ip,nw_src=' + sourceIp + ',nw_dst=' + destIp + ',action=mod_dl_dst:' + localGatewayMacAddress + ',' + self.gatewayOvsPort).execute()
-        # Add on openFlow rule to respond to ARP requests coming from the gateway interface directed at the sourceIp:
-        BashCommand('ovs-ofctl add-flow ' + ovsBridge + ' "table=0, arp, nw_dst=' + sourceIp + ', in_port=' + self.gatewayOvsPort + ', actions=load:0x2->NXM_OF_ARP_OP[], move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[], mod_dl_src:' + sourceMacAddress + ', move:NXM_NX_ARP_SHA[]->NXM_NX_ARP_THA[], move:NXM_OF_ARP_SPA[]->NXM_OF_ARP_TPA[], load:0x' + stripMacAddress(sourceMacAddress) + '->NXM_NX_ARP_SHA[], load:0x' + convertIpToHex(sourceIp) + '->NXM_OF_ARP_SPA[], in_port"').execute()
+        # Add an openFlow rule to respond to spoof ARP requests coming from the gateway interface directed at the sourceIp to have appear as if they were generated from the destIp:
+        BashCommand(self.getArpIpSpoofingRule(ovsBridge, sourceIp, destIp)).execute()
         # Add an entry to the routing table, allowing the IPSEC module to forward packets to the source IP via the gateway interface:
         BashCommand('ip route add ' + sourceIp + '/32 via 0.0.0.0 dev ' + self.gatewayInterfaceName, errorHandler=ipRouteAddStderrHandler).execute()
         # Update strongswan based on the newly written configuration files:
@@ -142,9 +142,12 @@ class IpsecManager(object):
         BashCommand('strongswan down ' + name).execute()
 
         BashCommand('ovs-ofctl del-flows ' + ovsBridge + ' table=0,ip,nw_src=' + sourceIp + ',nw_dst=' + destIp).execute()
+        BashCommand('ovs-ofctl del-flows ' + ovsBridge + ' table=0,arp,nw_dst=' + sourceIp + ',in_port=' + self.gatewayOvsPort).execute()
 
-        if not self.anotherTunnelSharesSourceIp(name, sourceIp):
-            BashCommand('ovs-ofctl del-flows ' + ovsBridge + ' table=0,arp,nw_dst=' + sourceIp + ',in_port=' + self.gatewayOvsPort).execute()
+        if self.anotherTunnelSharesSourceIp(name, sourceIp):
+            _, _, alternateDestIp = self.getTunnelThatSharesSourceIp(name, sourceIp)
+            BashCommand(self.getArpIpSpoofingRule(ovsBridge, sourceIp, alternateDestIp)).execute()
+        else:
             BashCommand('ip route del ' + sourceIp + '/32').execute()
 
     # Returns a list of the transparent IPSEC tunnels in existence
@@ -178,6 +181,9 @@ class IpsecManager(object):
     def getLocalGatewayMacAddressFromGatewayConf(self):
         return re.search(r'gatewayMac\s+:\s+(?P<localGatewayMacAddress>([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})', open(self.gatewayConfFilename).read()).group('localGatewayMacAddress')
 
+    def getArpIpSpoofingRule(self, ovsBridge, sourceIp, destIp):
+        return 'ovs-ofctl add-flow ' + ovsBridge + ' "table=0, arp, nw_dst=' + sourceIp + ', in_port=' + self.gatewayOvsPort + ', actions=load:0x' + convertIpToHex(destIp) + '->NXM_OF_ARP_SPA[], normal"'
+
     def getIpFromTunnelLines(self, tunnelLines, keyword):
         for line in tunnelLines:
             dataMatches = re.search(keyword + r'=(?P<Ip>(\d+\.){3}\d+)', line.strip())
@@ -197,8 +203,11 @@ class IpsecManager(object):
     def getDestIpFromIpsecConf(self, tunnelName):
         return self.getIpFromIpsecConf(tunnelName, 'rightsubnet')
 
-    def anotherTunnelSharesSourceIp(self, tunnelName, sourceIp):
-        for currentTunnelName, currentSourceIp, _ in self.listIpsecTunnels():
+    def getTunnelThatSharesSourceIp(self, tunnelName, sourceIp):
+        for currentTunnelName, currentSourceIp, currentDestIp in self.listIpsecTunnels():
             if tunnelName != currentTunnelName and sourceIp == currentSourceIp:
-                return True
-        return False
+                return currentTunnelName, currentSourceIp, currentDestIp
+        return None
+
+    def anotherTunnelSharesSourceIp(self, tunnelName, sourceIp):
+        return bool(self.getTunnelThatSharesSourceIp(tunnelName, sourceIp))

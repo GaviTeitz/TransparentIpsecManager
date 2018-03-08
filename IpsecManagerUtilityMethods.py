@@ -42,6 +42,3 @@ def getMacAddr(interfaceName):
 
 def convertIpToHex(ip):
     return ''.join([format(int(ipField), '02x') for ipField in ip.split('.')])
-
-def stripMacAddress(macAddress):
-    return ''.join(macAddress.split(':'))
